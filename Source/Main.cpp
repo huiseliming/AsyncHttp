@@ -498,6 +498,7 @@ int main(int argc, char *argv[]) {
     {
         std::shared_ptr<AsyncHttp::CServer> server = std::make_shared<AsyncHttp::CServer>(boost::asio::ip::address_v4::any(), 80);
         server->setEnabled(true);
+        server->addRoute("/h", [] (/*int arg1, std::string arg2, */std::shared_ptr<AsyncHttp::IRequest> req) {; });
         std::this_thread::sleep_for(std::chrono::seconds(60));
     }
     catch (const std::exception& e)

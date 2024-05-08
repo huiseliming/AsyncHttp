@@ -35,6 +35,78 @@ namespace AsyncHttp {
     beast::string_view MimeType(beast::string_view path);
     std::string PathCat(beast::string_view base, beast::string_view path);
 
+    template <class Body, class Allocator>
+    beast::http::response<beast::http::string_body> BadRequest(beast::http::request<Body, beast::http::basic_fields<Allocator>>& req, std::string&& body)
+    {
+        beast::http::response<beast::http::string_body> res{ beast::http::status::bad_request, req.version() };
+        res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(beast::http::field::content_type, "text/html");
+        res.keep_alive(req.keep_alive());
+        res.body() = std::move(body);
+        res.prepare_payload();
+        return res;
+    }
+
+    template <class Body, class Allocator>
+    beast::http::response<beast::http::string_body> NotFound(beast::http::request<Body, beast::http::basic_fields<Allocator>>& req, std::string&& body)
+    {
+        beast::http::response<beast::http::string_body> res{ beast::http::status::not_found, req.version() };
+        res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(beast::http::field::content_type, "text/html");
+        res.keep_alive(req.keep_alive());
+        res.body() = std::move(body);
+        res.prepare_payload();
+        return res;
+    }
+
+    template <class Body, class Allocator>
+    beast::http::response<beast::http::string_body> InternalServerError(beast::http::request<Body, beast::http::basic_fields<Allocator>>& req, std::string&& body)
+    {
+        beast::http::response<beast::http::string_body> res{ beast::http::status::internal_server_error, req.version() };
+        res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(beast::http::field::content_type, "text/html");
+        res.keep_alive(req.keep_alive());
+        res.body() = std::move(body);
+        res.prepare_payload();
+        return res;
+    }
+
+    class CSession;
+
+    class IRequest : public std::enable_shared_from_this<IRequest> {
+    public:
+        virtual ~IRequest() = default;
+        virtual auto method() const->beast::http::verb = 0;
+        virtual auto query() const->beast::string_view = 0;
+        virtual auto body() const->std::string_view = 0;
+        virtual auto bodyData() const -> const char* = 0;
+        virtual auto bodyLength() const->size_t = 0;
+        virtual auto path() const->beast::string_view = 0;
+        virtual auto version() const -> unsigned int = 0;
+        virtual const std::shared_ptr<CSession>& session() const = 0;
+    };
+
+    class CRequest : public IRequest {
+    public:
+        CRequest(beast::http::request<beast::http::string_body> request, std::shared_ptr<CSession> session)
+            : mImpl(request)
+            , mSession(session){
+        }
+        auto method() const -> beast::http::verb override { return mImpl.method(); }
+        auto query() const -> beast::string_view override { return (mImpl.target()); }
+        auto body() const -> std::string_view override { return mImpl.body(); }
+        auto bodyData() const -> const char* override { return mImpl.body().c_str(); }
+        auto bodyLength() const -> size_t override { return mImpl.body().length(); }
+        auto path() const -> beast::string_view override { return mImpl.target(); }
+        auto version() const -> unsigned int override { return mImpl.version(); }
+        auto session() const -> const std::shared_ptr<CSession>& override { return mSession; }
+
+    protected:
+        beast::http::request<beast::http::string_body> mImpl;
+        std::shared_ptr<CSession> mSession;
+    };
+
+
     class CSession : public std::enable_shared_from_this<CSession> {
         static constexpr std::size_t KQueueLimit = 8; // max responses
     public:
@@ -69,8 +141,8 @@ namespace AsyncHttp {
                 BOOST_LOG_TRIVIAL(error) << "onRead(...): " << errorCode.what();
                 return;
             }
-
-            queueWrite(handleRequest(*mDocRoot, mRequestParser->release()));
+            auto cc = std::make_shared<CRequest>(mRequestParser->release(), shared_from_this());
+            //queueWrite(handleRequest(*mDocRoot, mRequestParser->release()));
 
             if (mResponseQueue.size() < KQueueLimit)
                 doRead();
@@ -125,50 +197,14 @@ namespace AsyncHttp {
             beast::string_view docRoot,
             beast::http::request<Body, beast::http::basic_fields<Allocator>>&& req)
         {
-            auto const bad_request =
-                [&req](beast::string_view why)
-                {
-                    beast::http::response<beast::http::string_body> res{ beast::http::status::bad_request, req.version() };
-                    res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
-                    res.set(beast::http::field::content_type, "text/html");
-                    res.keep_alive(req.keep_alive());
-                    res.body() = std::string(why);
-                    res.prepare_payload();
-                    return res;
-                };
-
-            auto const not_found =
-                [&req](beast::string_view target)
-                {
-                    beast::http::response<beast::http::string_body> res{ beast::http::status::not_found, req.version() };
-                    res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
-                    res.set(beast::http::field::content_type, "text/html");
-                    res.keep_alive(req.keep_alive());
-                    res.body() = "The resource '" + std::string(target) + "' was not found.";
-                    res.prepare_payload();
-                    return res;
-                };
-
-            auto const server_error =
-                [&req](beast::string_view what)
-                {
-                    beast::http::response<beast::http::string_body> res{ beast::http::status::internal_server_error, req.version() };
-                    res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
-                    res.set(beast::http::field::content_type, "text/html");
-                    res.keep_alive(req.keep_alive());
-                    res.body() = "An error occurred: '" + std::string(what) + "'";
-                    res.prepare_payload();
-                    return res;
-                };
-
             if (req.method() != beast::http::verb::get &&
                 req.method() != beast::http::verb::head)
-                return bad_request("Unknown HTTP-method");
+                return BadRequest(req, "Unknown HTTP-method");
 
             if (req.target().empty() ||
                 req.target()[0] != '/' ||
                 req.target().find("..") != beast::string_view::npos)
-                return bad_request("Illegal request-target");
+                return BadRequest(req, "Illegal request-target");
 
             std::string path = PathCat(docRoot, req.target());
             if (req.target().back() == '/')
@@ -179,10 +215,10 @@ namespace AsyncHttp {
             body.open(path.c_str(), beast::file_mode::scan, ec);
 
             if (ec == beast::errc::no_such_file_or_directory)
-                return not_found(req.target());
+                return NotFound(req, "The resource '" + std::string(req.target()) + "' was not found.");
 
             if (ec)
-                return server_error(ec.message());
+                return InternalServerError(req, "An error occurred: '" + ec.message() + "'" );
 
             auto const size = body.size();
 
@@ -278,7 +314,48 @@ namespace AsyncHttp {
         std::shared_ptr<std::string const> mDocRoot;
     };
 
-    class CServer : public std::enable_shared_from_this<CServer> {
+    class CController {
+    public:
+        CController() = default;
+        template<typename Lambda>
+        CController(Lambda lambda) :mHandler(lambda){
+        
+        }
+    protected:
+        std::function<void(std::shared_ptr<IRequest>)> mHandler;
+    };
+
+
+
+    class CRouter {
+    public:
+        
+        bool addRoute(const char* path, std::unique_ptr<CController> controller) {
+            auto it = mGetRequestRouteMap.find(path);
+            if (it == mGetRequestRouteMap.end())
+            {
+                return mGetRequestRouteMap.insert(std::make_pair(path, std::move(controller))).second;
+            } 
+            return false;
+        }
+
+        template<typename Func>
+        bool addRoute(const char* path, Func&& func) {
+            auto it = mGetRequestRouteMap.find(path);
+            if (it == mGetRequestRouteMap.end())
+            {
+                return mGetRequestRouteMap.insert(std::make_pair(path, std::make_unique<CController>([func = std::forward<Func>(func)](std::shared_ptr<IRequest> req) {
+                    func(req);
+                }))).second;
+            }
+            return false;
+        }
+
+    protected:
+        std::unordered_map<std::string, std::unique_ptr<CController>> mGetRequestRouteMap;
+    };
+
+    class CServer : public std::enable_shared_from_this<CServer> , public CRouter {
     public:
         CServer(asio::ip::address address = asio::ip::address_v4::any(), uint16_t port = 0, std::string docRoot = ".", size_t numThreads = std::thread::hardware_concurrency())
             : mIoContext()
@@ -375,22 +452,10 @@ namespace AsyncHttp {
             } else {
                 if (isEnabled()) {
                     std::shared_ptr<std::string> docRootPtr;
-                    if (!mDocRoot.empty() && mDocRoot[0] == '.')
+                    if (!mDocRoot.empty() && mDocRoot[0] == '.' && (mDocRoot.size() == 1 || (mDocRoot.size() >= 2 && (mDocRoot[1] == '\\' || mDocRoot[1] == '/'))))
                     {
-                        if (mDocRoot.size() == 1)
-                        {
-                            auto docRootPath = boost::dll::program_location().parent_path() / (mDocRoot.c_str() + 1);
-                            docRootPtr = std::make_shared<std::string>(docRootPath.string());
-                        }
-                        else if (mDocRoot.size() >= 2 && (mDocRoot[1] == '\\' || mDocRoot[1] == '/'))
-                        {
-                            auto docRootPath = boost::dll::program_location().parent_path() / (mDocRoot.c_str() + 1);
-                            docRootPtr = std::make_shared<std::string>(docRootPath.string());
-                        }
-                        else
-                        {
-                            docRootPtr = std::make_shared<std::string>(mDocRoot);
-                        }
+                        auto docRootPath = boost::dll::program_location().parent_path() / (mDocRoot.c_str() + 1);
+                        docRootPtr = std::make_shared<std::string>(docRootPath.string());
                     }
                     else
                     {
@@ -402,7 +467,6 @@ namespace AsyncHttp {
                 }
             }
         }
-
         void onCheckTimeout(const boost::system::error_code& errorCode) {
             if (errorCode.failed())
             {
@@ -413,7 +477,6 @@ namespace AsyncHttp {
             mCheckTimer.expires_at(mCheckTimer.expiry() + std::chrono::seconds(1));
             mCheckTimer.async_wait(std::bind(&CServer::onCheckTimeout, this, std::placeholders::_1));
         }
-
         void stop() {
             asio::dispatch(mStand, [this, self = shared_from_this()] { mIoContext.stop(); });
             for (auto& thread : mThreads)
@@ -436,6 +499,7 @@ namespace AsyncHttp {
         boost::asio::ip::address mAddress;
         uint16_t mPort{0};
         std::string mDocRoot;
+
     };
 
 }
