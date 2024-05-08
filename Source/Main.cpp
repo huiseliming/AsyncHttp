@@ -494,6 +494,17 @@ private:
 #include "AsyncHttp.h"
 
 int main(int argc, char *argv[]) {
+    try
+    {
+        std::shared_ptr<AsyncHttp::CServer> server = std::make_shared<AsyncHttp::CServer>(boost::asio::ip::address_v4::any(), 80);
+        server->setEnabled(true);
+        std::this_thread::sleep_for(std::chrono::seconds(60));
+    }
+    catch (const std::exception& e)
+    {
+        BOOST_LOG_TRIVIAL(error) << "onWrite(...): " << e.what();
+    }
+    return 0;
   // Check command line arguments.
   if (argc != 5) {
     std::cerr
@@ -511,7 +522,7 @@ int main(int argc, char *argv[]) {
   net::io_context ioc{threads};
   
   // Create and launch a listening port
-  std::make_shared<AsyncHttp::CListener>(ioc, tcp::endpoint{address, port}, doc_root)
+  std::make_shared<AsyncHttp::CListener>(ioc, tcp::endpoint{address, port}, doc_root, make_strand(ioc))
       ->run();
 
   // Capture SIGINT and SIGTERM to perform a clean shutdown

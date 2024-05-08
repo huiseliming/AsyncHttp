@@ -5,6 +5,7 @@
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/signal_set.hpp>
 #include <boost/asio/strand.hpp>
+#include <boost/asio/deadline_timer.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/version.hpp>
@@ -12,6 +13,9 @@
 #include <boost/make_unique.hpp>
 #include <boost/optional.hpp>
 #include <boost/log/trivial.hpp>
+#include <boost/bind/bind.hpp>
+#include <boost/dll.hpp>
+#include <boost/date_time/posix_time/posix_time.hpp>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
@@ -20,68 +24,16 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <future>
 
 namespace AsyncHttp {
     using namespace boost;
     using Acceptor = asio::ip::tcp::acceptor;
     using IoContext = asio::io_context;
     using Endpoint = asio::ip::tcp::endpoint;
-    using Strand = asio::strand<asio::io_context::executor_type>;
 
-    beast::string_view MimeType(beast::string_view path)
-    {
-        using beast::iequals;
-        auto const ext = [&path]
-            {
-                auto const pos = path.rfind(".");
-                if (pos == beast::string_view::npos)
-                    return beast::string_view{};
-                return path.substr(pos);
-            }();
-            if (iequals(ext, ".htm"))  return "text/html";
-            if (iequals(ext, ".html")) return "text/html";
-            if (iequals(ext, ".php"))  return "text/html";
-            if (iequals(ext, ".css"))  return "text/css";
-            if (iequals(ext, ".txt"))  return "text/plain";
-            if (iequals(ext, ".js"))   return "application/javascript";
-            if (iequals(ext, ".json")) return "application/json";
-            if (iequals(ext, ".xml"))  return "application/xml";
-            if (iequals(ext, ".swf"))  return "application/x-shockwave-flash";
-            if (iequals(ext, ".flv"))  return "video/x-flv";
-            if (iequals(ext, ".png"))  return "image/png";
-            if (iequals(ext, ".jpe"))  return "image/jpeg";
-            if (iequals(ext, ".jpeg")) return "image/jpeg";
-            if (iequals(ext, ".jpg"))  return "image/jpeg";
-            if (iequals(ext, ".gif"))  return "image/gif";
-            if (iequals(ext, ".bmp"))  return "image/bmp";
-            if (iequals(ext, ".ico"))  return "image/vnd.microsoft.icon";
-            if (iequals(ext, ".tiff")) return "image/tiff";
-            if (iequals(ext, ".tif"))  return "image/tiff";
-            if (iequals(ext, ".svg"))  return "image/svg+xml";
-            if (iequals(ext, ".svgz")) return "image/svg+xml";
-            return "application/text";
-    }
-
-    std::string PathCat(beast::string_view base, beast::string_view path) {
-        if (base.empty())
-            return std::string(path);
-        std::string result(base);
-#ifdef BOOST_MSVC
-        char constexpr pathSeparator = '\\';
-        if (result.back() == pathSeparator)
-            result.resize(result.size() - 1);
-        result.append(path.data(), path.size());
-        for (auto& c : result)
-            if (c == '/')
-                c = pathSeparator;
-#else
-        char constexpr pathSeparator = '/';
-        if (result.back() == pathSeparator)
-            result.resize(result.size() - 1);
-        result.append(path.data(), path.size());
-#endif
-        return result;
-    }
+    beast::string_view MimeType(beast::string_view path);
+    std::string PathCat(beast::string_view base, beast::string_view path);
 
     class CSession : public std::enable_shared_from_this<CSession> {
         static constexpr std::size_t KQueueLimit = 8; // max responses
@@ -265,9 +217,9 @@ namespace AsyncHttp {
 
     class CListener : public std::enable_shared_from_this<CListener> {
     public:
-        CListener(IoContext& ioContext, Endpoint endpoint, std::shared_ptr<std::string const> const& docRoot)
+        CListener(IoContext& ioContext, Endpoint endpoint, std::shared_ptr<std::string const> const& docRoot, asio::strand<asio::io_context::executor_type> strand)
             : mIoContext(ioContext)
-            , mAcceptor(asio::make_strand(ioContext))
+            , mAcceptor(strand)
             , mDocRoot(docRoot) {
             beast::error_code errorCode;
 
@@ -318,14 +270,172 @@ namespace AsyncHttp {
             doAccept();
         }
 
+        Acceptor& acceptor() { return mAcceptor; }
+
     protected:
-        IoContext& mIoContext;
+        asio::io_context& mIoContext;
         Acceptor mAcceptor;
         std::shared_ptr<std::string const> mDocRoot;
     };
 
-    class CServer {
+    class CServer : public std::enable_shared_from_this<CServer> {
+    public:
+        CServer(asio::ip::address address = asio::ip::address_v4::any(), uint16_t port = 0, std::string docRoot = ".", size_t numThreads = std::thread::hardware_concurrency())
+            : mIoContext()
+            , mIoContextWork(mIoContext)
+            , mStand(asio::make_strand(mIoContext))
+            , mCheckTimer(mIoContext, boost::asio::chrono::seconds(1))
+            , mEnabled(false)
+            , mAddress(address)
+            , mPort(port)
+            , mDocRoot(docRoot)
+        {
+            for (size_t i = 0; i < numThreads; i++)
+            {
+                mThreads.emplace_back(std::thread([=] { mIoContext.run(); }));
+            }
+            mCheckTimer.async_wait(std::bind(&CServer::onCheckTimeout, this, std::placeholders::_1));
+        }
 
+        ~CServer() {
+            setEnabled(false);
+            stop();
+        }
 
+        bool isEnabled() { return mEnabled; }
+        bool isDisabled() { return !mEnabled; }
+        void setEnabled(bool newEnabled) { asio::dispatch(mStand, std::bind(&CServer::onSetEnabled, shared_from_this(), newEnabled)); }
+        void onSetEnabled(bool newEnabled) {
+            if (mEnabled != newEnabled)
+            {
+                mEnabled = newEnabled;
+                asio::dispatch(mStand, std::bind(&CServer::onCheck, shared_from_this()));
+            }
+        }
+
+        boost::asio::ip::address address() {
+            std::promise<boost::asio::ip::address> promise;
+            asio::dispatch(mStand, [&] { promise.set_value(mAddress); });
+            return promise.get_future().get();
+        }
+        void setAddress(boost::asio::ip::address newAddress) { asio::dispatch(mStand, std::bind(&CServer::onSetAddress, shared_from_this(), newAddress)); }
+        void onSetAddress(boost::asio::ip::address newAddress) {
+            if (mAddress != newAddress)
+            {
+                mAddress = newAddress;
+                if (auto listener = mListener.lock())
+                {
+                    listener->acceptor().close();
+                }
+            }
+        }
+
+        uint16_t port() {
+            std::promise<uint16_t> promise;
+            asio::dispatch(mStand, [&] { promise.set_value(mPort); });
+            return promise.get_future().get();
+        }
+        void setPort(uint16_t newPort) { asio::dispatch(mStand, std::bind(&CServer::onSetPort, shared_from_this(), newPort)); }
+        void onSetPort(uint16_t newPort) {
+            if (mPort != newPort)
+            {
+                mPort = newPort;
+                if (auto listener = mListener.lock())
+                {
+                    listener->acceptor().close();
+                }
+            }
+        }
+
+        std::string docRoot() {
+            std::promise<std::string> promise;
+            asio::dispatch(mStand, [&] { promise.set_value(mDocRoot); });
+            return promise.get_future().get();
+        }
+        void setDocRoot(std::string newDocRoot) { asio::dispatch(mStand, std::bind(&CServer::onSetDocRoot, shared_from_this(), newDocRoot)); }
+        void onSetDocRoot(std::string newDocRoot) {
+            if (mDocRoot != newDocRoot)
+            {
+                mDocRoot = newDocRoot;
+                if (auto listener = mListener.lock())
+                {
+                    listener->acceptor().close();
+                }
+            }
+        }
+
+        void onCheck() {
+            BOOST_LOG_TRIVIAL(error) << "onCheck(...): ";
+            if (!mListener.expired()) {
+                if (auto listener = mListener.lock()) {
+                    if (isDisabled()) {
+                        listener->acceptor().close();
+                    }
+                }
+            } else {
+                if (isEnabled()) {
+                    std::shared_ptr<std::string> docRootPtr;
+                    if (!mDocRoot.empty() && mDocRoot[0] == '.')
+                    {
+                        if (mDocRoot.size() == 1)
+                        {
+                            auto docRootPath = boost::dll::program_location().parent_path() / (mDocRoot.c_str() + 1);
+                            docRootPtr = std::make_shared<std::string>(docRootPath.string());
+                        }
+                        else if (mDocRoot.size() >= 2 && (mDocRoot[1] == '\\' || mDocRoot[1] == '/'))
+                        {
+                            auto docRootPath = boost::dll::program_location().parent_path() / (mDocRoot.c_str() + 1);
+                            docRootPtr = std::make_shared<std::string>(docRootPath.string());
+                        }
+                        else
+                        {
+                            docRootPtr = std::make_shared<std::string>(mDocRoot);
+                        }
+                    }
+                    else
+                    {
+                        docRootPtr = std::make_shared<std::string>(mDocRoot);
+                    }
+                    auto listener = std::make_shared<AsyncHttp::CListener>(mIoContext, asio::ip::tcp::endpoint{ mAddress, mPort }, docRootPtr, mStand);
+                    mListener = listener;
+                    listener->run();
+                }
+            }
+        }
+
+        void onCheckTimeout(const boost::system::error_code& errorCode) {
+            if (errorCode.failed())
+            {
+                BOOST_LOG_TRIVIAL(error) << "onCheckTimeout(...): " << errorCode.what();
+                return;
+            }
+            onCheck();
+            mCheckTimer.expires_at(mCheckTimer.expiry() + std::chrono::seconds(1));
+            mCheckTimer.async_wait(std::bind(&CServer::onCheckTimeout, this, std::placeholders::_1));
+        }
+
+        void stop() {
+            asio::dispatch(mStand, [this, self = shared_from_this()] { mIoContext.stop(); });
+            for (auto& thread : mThreads)
+            {
+                thread.join();
+            }
+        }
+
+        size_t numThreads() { return mThreads.size(); }
+
+    protected:
+        asio::io_context mIoContext;
+        asio::io_context::work mIoContextWork;
+        asio::strand<asio::io_context::executor_type> mStand;
+        boost::asio::steady_timer mCheckTimer;
+        std::weak_ptr<AsyncHttp::CListener> mListener;
+        bool mEnabled;
+        std::vector<std::thread> mThreads;
+
+        boost::asio::ip::address mAddress;
+        uint16_t mPort{0};
+        std::string mDocRoot;
     };
+
 }
