@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <boost/url/parse.hpp>
 #include "HttpUtils.h"
 #include "Session.h"
@@ -80,8 +80,9 @@ namespace Http {
 
     protected:
         struct CSegmentRoutingNode : public std::enable_shared_from_this<CSegmentRoutingNode> {
-            std::shared_ptr<CRequestHandler> mRequestHandler;
-            std::unordered_map<std::string, std::shared_ptr<CSegmentRoutingNode>> mSegmentRoutingTree;
+            std::shared_ptr<CRequestHandler> mPathEndRequestHandler;
+            std::shared_ptr<CRequestHandler> mParametersEndRequestHandler;
+            std::unordered_map<std::string_view, std::shared_ptr<CSegmentRoutingNode>> mSegmentRoutingTable;
         };
         struct CRoutingTable {
             void route(CSession* session, beast::http::request<beast::http::string_body>&& request) {
@@ -91,16 +92,45 @@ namespace Http {
                     return session->sendResponse(BadRequest(std::move(request), "Invalid URL : " + urlResult.error().message()));
                 }
                 boost::urls::url_view& urlView = urlResult.value();
-                auto it = mFullPathRoutingTable.find(urlView.path());
-                if (it != mFullPathRoutingTable.end())
                 {
-                    return (*it->second)(session, std::move(request));
+                    auto it = mFullPathRoutingTable.find(urlView.encoded_path());
+                    if (it != mFullPathRoutingTable.end())
+                    {
+                        return (*it->second)(session, std::move(request));
+                    }
                 }
-
+                std::vector<std::string_view> mappedParameters;
+                std::string segmentPath;
+                CSegmentRoutingNode* segmentRoutingNode = &mSegmentRoutingTree;
+                auto segmentsView = urlView.encoded_segments();
+                const char* segmentPathStart = segmentsView.begin()->data();
+                for (auto segmentsIt = segmentsView.begin(); segmentsIt != segmentsView.end(); segmentsIt++)
+                {
+                    segmentPath = std::string_view(segmentPathStart, segmentsIt->data() + segmentsIt->length() - segmentPathStart);
+                    auto it = segmentRoutingNode->mSegmentRoutingTable.find(std::string_view(segmentPathStart, segmentsIt->data() + segmentsIt->length() - segmentPathStart));
+                    if (it != segmentRoutingNode->mSegmentRoutingTable.end())
+                    {
+                        segmentRoutingNode = it->second.get();
+                        segmentsIt++;
+                        if (segmentsIt == segmentsView.end())
+                        {
+                            // TODO： pass mappedParameters
+                            return (*segmentRoutingNode->mPathEndRequestHandler)(session, std::move(request));
+                        }
+                        mappedParameters.push_back(*segmentsIt);
+                        if (segmentsView.back().data() == segmentsIt->data())
+                        {
+                            // TODO： pass mappedParameters
+                            return (*segmentRoutingNode->mParametersEndRequestHandler)(session, std::move(request));
+                        }
+                        segmentPathStart = segmentsIt->data() + segmentsIt->length() + 1;
+                    }
+                }
+                return session->sendResponse(NotFound(std::move(request), "The resource '" + std::string(request.target()) + "' was not found."));
                 BOOST_LOG_TRIVIAL(error) << "urlView.path(): " << urlView.path();
                 BOOST_LOG_TRIVIAL(error) << "urlView.has_query(): " << urlView.has_query();
                 BOOST_LOG_TRIVIAL(error) << "urlView.query(): " << urlView.query();
-                auto segmentsView = urlView.segments();
+                //auto segmentsView = urlView.encoded_segments();
                 for (auto segment : segmentsView)
                 {
                     BOOST_LOG_TRIVIAL(error) << "segment: " << segment;
@@ -136,8 +166,8 @@ namespace Http {
                 return false;
             }
         protected:
-            std::unordered_map<std::string, std::shared_ptr<CRequestHandler>> mFullPathRoutingTable;
-            std::unordered_map<std::string, std::shared_ptr<CSegmentRoutingNode>> mSegmentRoutingTree;
+            std::unordered_map<std::string_view, std::shared_ptr<CRequestHandler>> mFullPathRoutingTable;
+            CSegmentRoutingNode mSegmentRoutingTree;
         };
         CRoutingTable mGetRoutingTable;
         CRoutingTable mPostRoutingTable;
