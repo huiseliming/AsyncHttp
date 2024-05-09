@@ -1,5 +1,3 @@
-#include "AsyncHttp.h"
-
 #include <algorithm>
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/dispatch.hpp>
@@ -491,14 +489,16 @@ private:
 
 //------------------------------------------------------------------------------
 
-#include "AsyncHttp.h"
+#include "Http.h"
 
 int main(int argc, char *argv[]) {
     try
     {
-        std::shared_ptr<AsyncHttp::CServer> server = std::make_shared<AsyncHttp::CServer>(boost::asio::ip::address_v4::any(), 80);
+        std::shared_ptr<Http::CServer> server = std::make_shared<Http::CServer>(boost::asio::ip::address_v4::any(), 80);
         server->setEnabled(true);
-        server->addRoute("/h", [] (/*int arg1, std::string arg2, */std::shared_ptr<AsyncHttp::IRequest> req) {; });
+        server->addRoute("/hello", [=] (Http::CSession* session, beast::http::request<beast::http::string_body>&& request){
+            session->sendResponse(Http::InternalServerError(std::move(request), "world!"));
+        });
         std::this_thread::sleep_for(std::chrono::seconds(60));
     }
     catch (const std::exception& e)
@@ -506,47 +506,47 @@ int main(int argc, char *argv[]) {
         BOOST_LOG_TRIVIAL(error) << "onWrite(...): " << e.what();
     }
     return 0;
-  // Check command line arguments.
-  if (argc != 5) {
-    std::cerr
-        << "Usage: advanced-server <address> <port> <doc_root> <threads>\n"
-        << "Example:\n"
-        << "    advanced-server 0.0.0.0 8080 . 1\n";
-    return EXIT_FAILURE;
-  }
-  auto const address = net::ip::make_address(argv[1]);
-  auto const port = static_cast<unsigned short>(std::atoi(argv[2]));
-  auto const doc_root = std::make_shared<std::string>(argv[3]);
-  auto const threads = std::max<int>(1, std::atoi(argv[4]));
+  //// Check command line arguments.
+  //if (argc != 5) {
+  //  std::cerr
+  //      << "Usage: advanced-server <address> <port> <doc_root> <threads>\n"
+  //      << "Example:\n"
+  //      << "    advanced-server 0.0.0.0 8080 . 1\n";
+  //  return EXIT_FAILURE;
+  //}
+  //auto const address = net::ip::make_address(argv[1]);
+  //auto const port = static_cast<unsigned short>(std::atoi(argv[2]));
+  //auto const doc_root = std::make_shared<std::string>(argv[3]);
+  //auto const threads = std::max<int>(1, std::atoi(argv[4]));
 
-  // The io_context is required for all I/O
-  net::io_context ioc{threads};
-  
-  // Create and launch a listening port
-  std::make_shared<AsyncHttp::CListener>(ioc, tcp::endpoint{address, port}, doc_root, make_strand(ioc))
-      ->run();
+  //// The io_context is required for all I/O
+  //net::io_context ioc{threads};
+  //
+  //// Create and launch a listening port
+  //std::make_shared<Http::CListener>(ioc, tcp::endpoint{address, port}, doc_root, make_strand(ioc))
+  //    ->run();
 
-  // Capture SIGINT and SIGTERM to perform a clean shutdown
-  net::signal_set signals(ioc, SIGINT, SIGTERM);
-  signals.async_wait([&](beast::error_code const &, int) {
-    // Stop the `io_context`. This will cause `run()`
-    // to return immediately, eventually destroying the
-    // `io_context` and all of the sockets in it.
-    ioc.stop();
-  });
+  //// Capture SIGINT and SIGTERM to perform a clean shutdown
+  //net::signal_set signals(ioc, SIGINT, SIGTERM);
+  //signals.async_wait([&](beast::error_code const &, int) {
+  //  // Stop the `io_context`. This will cause `run()`
+  //  // to return immediately, eventually destroying the
+  //  // `io_context` and all of the sockets in it.
+  //  ioc.stop();
+  //});
 
-  // Run the I/O service on the requested number of threads
-  std::vector<std::thread> v;
-  v.reserve(threads - 1);
-  for (auto i = threads - 1; i > 0; --i)
-    v.emplace_back([&ioc] { ioc.run(); });
-  ioc.run();
+  //// Run the I/O service on the requested number of threads
+  //std::vector<std::thread> v;
+  //v.reserve(threads - 1);
+  //for (auto i = threads - 1; i > 0; --i)
+  //  v.emplace_back([&ioc] { ioc.run(); });
+  //ioc.run();
 
-  // (If we get here, it means we got a SIGINT or SIGTERM)
+  //// (If we get here, it means we got a SIGINT or SIGTERM)
 
-  // Block until all the threads exit
-  for (auto &t : v)
-    t.join();
+  //// Block until all the threads exit
+  //for (auto &t : v)
+  //  t.join();
 
-  return EXIT_SUCCESS;
+  //return EXIT_SUCCESS;
 }

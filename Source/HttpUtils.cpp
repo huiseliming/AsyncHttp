@@ -1,8 +1,7 @@
-#include "AsyncHttp.h"
+#include "HttpUtils.h"
 
-namespace AsyncHttp {
-
-    beast::string_view AsyncHttp::MimeType(beast::string_view path)
+namespace Http {
+    beast::string_view MimeType(beast::string_view path)
     {
         using beast::iequals;
         auto const ext = [&path]
@@ -55,4 +54,45 @@ namespace AsyncHttp {
 #endif
         return result;
     }
+    beast::http::response<beast::http::string_body> BadRequest(beast::http::request<beast::http::string_body>&& req, std::string body)
+    {
+        req.target();
+        beast::http::response<beast::http::string_body> res{ beast::http::status::bad_request, req.version() };
+        res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(beast::http::field::content_type, "text/html");
+        res.keep_alive(req.keep_alive());
+        res.body() = std::move(body);
+        res.prepare_payload();
+        return res;
+    }
+    beast::http::response<beast::http::string_body> NotFound(beast::http::request<beast::http::string_body>&& req, std::string body)
+    {
+        beast::http::response<beast::http::string_body> res{ beast::http::status::not_found, req.version() };
+        res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(beast::http::field::content_type, "text/html");
+        res.keep_alive(req.keep_alive());
+        res.body() = std::move(body);
+        res.prepare_payload();
+        return res;
+    }
+    beast::http::response<beast::http::string_body> InternalServerError(beast::http::request<beast::http::string_body>&& req, std::string body)
+    {
+        beast::http::response<beast::http::string_body> res{ beast::http::status::internal_server_error, req.version() };
+        res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
+        res.set(beast::http::field::content_type, "text/html");
+        res.keep_alive(req.keep_alive());
+        res.body() = std::move(body);
+        res.prepare_payload();
+        return res;
+    }
+    //beast::http::response<beast::http::string_body> InternalServerError(unsigned int version, std::string&& body)
+    //{
+    //    beast::http::response<beast::http::string_body> res{ beast::http::status::internal_server_error, version };
+    //    res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
+    //    res.set(beast::http::field::content_type, "text/html");
+    //    res.keep_alive(false);
+    //    res.body() = std::move(body);
+    //    res.prepare_payload();
+    //    return res;
+    //}
 }

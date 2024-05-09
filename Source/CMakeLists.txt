@@ -17,7 +17,7 @@ if(WIN32)
 else()
     set(Boost_USE_STATIC_LIBS OFF)
 endif()
-find_package(Boost COMPONENTS filesystem log REQUIRED)
+find_package(Boost COMPONENTS filesystem log url REQUIRED)
 target_link_libraries(${MODULE_NAME} PUBLIC Boost::headers ${Boost_LIBRARIES})
 
 # include(GenerateExportHeader)
