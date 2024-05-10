@@ -490,13 +490,56 @@ private:
 //------------------------------------------------------------------------------
 
 #include "Http.h"
+#include <boost/callable_traits.hpp>
+#include <boost/lexical_cast.hpp>
+
+template <typename FuncType, size_t I>
+using ArgType = std::tuple_element<I, boost::callable_traits::args_t<FuncType>>::type;
+
+template<typename T, std::size_t I>
+std::decay_t<T> ccc(const std::vector<std::string_view>& var) {
+    static_assert(!std::is_lvalue_reference_v<T> || (std::is_lvalue_reference_v<T> && std::is_const_v<std::remove_reference_t<T>>));
+    if constexpr (std::is_same_v<T, std::string_view>)
+    {
+        return var[I];
+    }
+    else
+    {
+        return boost::lexical_cast<std::decay_t<T>>(var[I]);
+    }
+}
+
+template<typename FuncType, std::size_t ... Indices>
+void fff(FuncType func, const std::vector<std::string_view>& var, int d, int e,std::index_sequence<Indices...> indices) {
+    func(ccc<ArgType<FuncType, Indices>, Indices>(var)..., d, e);
+}
 
 int main(int argc, char *argv[]) {
+    
+    std::cout << typeid(std::tuple_element<0, boost::callable_traits::args_t<decltype(main)>>::type).name() << std::endl;
+    std::cout << typeid(boost::mpl::at_c<boost::function_types::parameter_types<decltype(main)>, 0>::type).name() << std::endl;
+    //boost::mpl::at_c<boost::function_types::parameter_types<decltype(main)>, 0>::type;
+    fff([](std::string_view a, std::string_view b, std::string_view c, int d, int e) {
+        std::cout << "a: " << a << std::endl;
+        std::cout << "b: " << b << std::endl;
+        std::cout << "c: " << c << std::endl;
+        std::cout << "d: " << d << std::endl;
+        std::cout << "e: " << e << std::endl;
+        
+    }, { "1", "2", "3", }, 4, 5, std::make_index_sequence<3>());
+    fff([](const int&& a, const std::string& b, const char c, int d, int e) mutable {
+        std::cout << "a: " << a << std::endl;
+        std::cout << "b: " << b << std::endl;
+        std::cout << "c: " << c << std::endl;
+        std::cout << "d: " << d << std::endl;
+        std::cout << "e: " << e << std::endl;
+    }, { "1", "2", "3",}, 4, 5, std::make_index_sequence<3>());
+
     try
     {
         std::shared_ptr<Http::CServer> server = std::make_shared<Http::CServer>(boost::asio::ip::address_v4::any(), 80);
         server->setEnabled(true);
-        server->addRoute(beast::http::verb::get, "/hello/{}", [=] (Http::CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&){
+        server->addRoute(beast::http::verb::get, "/hello/{}", [=] (std::string cc, Http::CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&){
             session->sendResponse(Http::InternalServerError(std::move(request), "world!"));
         });
         server->addRoute(beast::http::verb::get, "/hello/{}/world", [=](Http::CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&) {

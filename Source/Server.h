@@ -1,6 +1,10 @@
 ﻿#pragma once
 #include <boost/url/parse.hpp>
 #include <boost/algorithm/string.hpp>
+#include <boost/function_types/function_type.hpp>
+#include <boost/function_types/parameter_types.hpp>
+#include <boost/function_types/function_arity.hpp>
+#include <boost/mpl/for_each.hpp>
 #include "HttpUtils.h"
 #include "Session.h"
 
@@ -201,9 +205,23 @@ namespace Http {
             return false;
         }
 
+        //template<typename Func, std::size_t Indices>
+        //void f(Func func, std::vector<std::string_view>& var) {
+        //    func(, );
+        //}
+
         template<typename Func>
-        bool addRoute(beast::http::verb verb, const char* path, Func&& func) {
-            return addRoute(verb, std::make_shared<CRequestHandler>(path, std::forward<Func>(func)));
+        FORCEINLINE bool addRoute(beast::http::verb verb, const char* path, Func&& func) {
+            if constexpr (std::is_convertible_v<Func, FRequestHandlerFunc>)
+            {
+                return addRoute(verb, std::make_shared<CRequestHandler>(path, std::forward<Func>(func)));
+            }
+            else
+            {
+                return addRoute(verb, std::make_shared<CRequestHandler>(path, [](CSession*, beast::http::request<beast::http::string_body>&&, const std::vector<std::string_view>&) {
+
+                }));
+            }
         }
 
     protected:
