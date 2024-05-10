@@ -1,10 +1,8 @@
 ﻿#pragma once
 #include <boost/url/parse.hpp>
 #include <boost/algorithm/string.hpp>
-#include <boost/function_types/function_type.hpp>
-#include <boost/function_types/parameter_types.hpp>
-#include <boost/function_types/function_arity.hpp>
-#include <boost/mpl/for_each.hpp>
+#include <boost/callable_traits.hpp>
+#include <boost/lexical_cast.hpp>
 #include "HttpUtils.h"
 #include "Session.h"
 
@@ -17,20 +15,20 @@ namespace Http {
         static inline void NotImpl(CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&) {
             session->sendResponse(InternalServerError(std::move(request), "The requestHandler " + std::string(request.target()) + " not implemented"));
         }
-        static inline const std::vector<std::string_view> EmptyMappedParameters;
+        static inline const std::vector<std::string_view> EmptyMappingParameters;
     public:
         FORCEINLINE CRequestHandler(const std::string& path) : mPath(path), mFunc(&NotImpl) {}
         template<typename Lambda>
         FORCEINLINE CRequestHandler(const std::string& path, Lambda&& lambda) : mPath(path), mFunc(std::forward<Lambda>(lambda)) {}
         virtual ~CRequestHandler() = default;
-        FORCEINLINE void operator()(CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>& mappedParameters = EmptyMappedParameters) {
+        FORCEINLINE void operator()(CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>& mappingParameters = EmptyMappingParameters) {
             BOOST_LOG_TRIVIAL(error) << "mappedParameter BG: ";
-            for (auto mappedParameter: mappedParameters)
+            for (auto mappedParameter: mappingParameters)
             {
                 BOOST_LOG_TRIVIAL(error) << "mappedParameter   : " << mappedParameter;
             }
             BOOST_LOG_TRIVIAL(error) << "mappedParameter ED: ";
-            mFunc(session, std::move(request), mappedParameters);
+            mFunc(session, std::move(request), mappingParameters);
         }
         std::string_view path() { return mPath; }
         const FRequestHandlerFunc& func() { return mFunc; }
@@ -64,7 +62,7 @@ namespace Http {
                 }
             }
             CRequestHandler* requestHandler = nullptr;
-            std::vector<std::string_view> mappedParameters;
+            std::vector<std::string_view> mappingParameters;
             CSegmentRoutingNode* segmentRoutingNode = &mSegmentRoutingTree;
             auto segmentsView = urlView.encoded_segments();
             const char* segmentPathStart = segmentsView.begin()->data();
@@ -80,7 +78,7 @@ namespace Http {
                         requestHandler = segmentRoutingNode->mPathEndRequestHandler.get();
                         break;
                     }
-                    mappedParameters.push_back(*segmentsIt);
+                    mappingParameters.push_back(*segmentsIt);
                     if (segmentsView.back().data() == segmentsIt->data())
                     {
                         requestHandler = segmentRoutingNode->mParametersEndRequestHandler.get();
@@ -91,7 +89,7 @@ namespace Http {
             }
             if (requestHandler)
             {
-                return (*requestHandler)(session, std::move(request), mappedParameters);
+                return (*requestHandler)(session, std::move(request), mappingParameters);
             }
             return session->sendResponse(NotFound(std::move(request), "The resource '" + std::string(request.target()) + "' was not found."));
             BOOST_LOG_TRIVIAL(error) << "urlView.path(): " << urlView.path();
@@ -205,21 +203,38 @@ namespace Http {
             return false;
         }
 
-        //template<typename Func, std::size_t Indices>
-        //void f(Func func, std::vector<std::string_view>& var) {
-        //    func(, );
-        //}
+        template<typename FuncType, std::size_t ... Indices>
+        static void InvokeRequestHandler(FuncType func, CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>& mappingParameters, std::index_sequence<Indices...> indices) {
+            func(session, std::move(request), boost::lexical_cast<std::decay_t<typename std::tuple_element<Indices + 2, boost::callable_traits::args_t<FuncType>>::type>>(mappingParameters[Indices])...);
+        }
 
-        template<typename Func>
-        FORCEINLINE bool addRoute(beast::http::verb verb, const char* path, Func&& func) {
-            if constexpr (std::is_convertible_v<Func, FRequestHandlerFunc>)
+        template<typename FuncType>
+        FORCEINLINE bool addRoute(beast::http::verb verb, const char* path, FuncType&& func) {
+            if constexpr (std::is_convertible_v<FuncType, FRequestHandlerFunc>)
             {
-                return addRoute(verb, std::make_shared<CRequestHandler>(path, std::forward<Func>(func)));
+                return addRoute(verb, std::make_shared<CRequestHandler>(path, std::forward<FuncType>(func)));
             }
             else
             {
-                return addRoute(verb, std::make_shared<CRequestHandler>(path, [](CSession*, beast::http::request<beast::http::string_body>&&, const std::vector<std::string_view>&) {
-
+                static_assert(std::is_same_v<typename std::tuple_element<0, boost::callable_traits::args_t<FuncType>>::type, CSession* >);
+                static_assert(std::is_same_v<typename std::tuple_element<1, boost::callable_traits::args_t<FuncType>>::type, beast::http::request<beast::http::string_body>&&>);
+                return addRoute(verb, std::make_shared<CRequestHandler>(path, [func = std::move(func)](CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>& mappingParameters) {
+                    constexpr std::size_t NumMappingParameters = std::tuple_size_v<boost::callable_traits::args_t<FuncType>> - 2;
+                    if (mappingParameters.size() == NumMappingParameters)
+                    {
+                        try
+                        {
+                            InvokeRequestHandler(func, session, std::move(request), mappingParameters, std::make_index_sequence<NumMappingParameters>());
+                        }
+                        catch (const boost::bad_lexical_cast& badLexicalCast)
+                        {
+                            session->sendResponse(Http::InternalServerError(std::move(request), std::format("Bad lexical cast: %s", badLexicalCast.what())));
+                        }
+                    }
+                    else
+                    {
+                        session->sendResponse(Http::InternalServerError(std::move(request), std::format("Mismatch in number of mapping parameters:")));
+                    }
                 }));
             }
         }

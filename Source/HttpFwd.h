@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <boost/config.hpp>
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/deadline_timer.hpp>
 #include <boost/asio/dispatch.hpp>

@@ -490,8 +490,6 @@ private:
 //------------------------------------------------------------------------------
 
 #include "Http.h"
-#include <boost/callable_traits.hpp>
-#include <boost/lexical_cast.hpp>
 
 template <typename FuncType, size_t I>
 using ArgType = std::tuple_element<I, boost::callable_traits::args_t<FuncType>>::type;
@@ -515,9 +513,12 @@ void fff(FuncType func, const std::vector<std::string_view>& var, int d, int e,s
 }
 
 int main(int argc, char *argv[]) {
-    
+
+    std::string_view ccs = "dsds";
+    auto aa = boost::lexical_cast<std::string>(ccs);
+
     std::cout << typeid(std::tuple_element<0, boost::callable_traits::args_t<decltype(main)>>::type).name() << std::endl;
-    std::cout << typeid(boost::mpl::at_c<boost::function_types::parameter_types<decltype(main)>, 0>::type).name() << std::endl;
+    //std::cout << typeid(boost::mpl::at_c<boost::function_types::parameter_types<decltype(main)>, 0>::type).name() << std::endl;
     //boost::mpl::at_c<boost::function_types::parameter_types<decltype(main)>, 0>::type;
     fff([](std::string_view a, std::string_view b, std::string_view c, int d, int e) {
         std::cout << "a: " << a << std::endl;
@@ -539,7 +540,13 @@ int main(int argc, char *argv[]) {
     {
         std::shared_ptr<Http::CServer> server = std::make_shared<Http::CServer>(boost::asio::ip::address_v4::any(), 80);
         server->setEnabled(true);
-        server->addRoute(beast::http::verb::get, "/hello/{}", [=] (std::string cc, Http::CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&){
+        server->addRoute(beast::http::verb::get, "/hello/{}/{}/{}/{}/{}/{}", [=] (Http::CSession* session, beast::http::request<beast::http::string_body>&& request, std::string a, std::string&& b, const std::string& c, int d, double&& e, const int64_t& f){
+            std::cout << "a: " << a << std::endl;
+            std::cout << "b: " << b << std::endl;
+            std::cout << "c: " << c << std::endl;
+            std::cout << "d: " << d << std::endl;
+            std::cout << "e: " << e << std::endl;
+            std::cout << "f: " << f << std::endl;
             session->sendResponse(Http::InternalServerError(std::move(request), "world!"));
         });
         server->addRoute(beast::http::verb::get, "/hello/{}/world", [=](Http::CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&) {
