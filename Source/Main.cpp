@@ -496,7 +496,19 @@ int main(int argc, char *argv[]) {
     {
         std::shared_ptr<Http::CServer> server = std::make_shared<Http::CServer>(boost::asio::ip::address_v4::any(), 80);
         server->setEnabled(true);
-        server->addRoute(beast::http::verb::get, "/hello", [=] (Http::CSession* session, beast::http::request<beast::http::string_body>&& request){
+        server->addRoute(beast::http::verb::get, "/hello/{}", [=] (Http::CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&){
+            session->sendResponse(Http::InternalServerError(std::move(request), "world!"));
+        });
+        server->addRoute(beast::http::verb::get, "/hello/{}/world", [=](Http::CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&) {
+            session->sendResponse(Http::InternalServerError(std::move(request), "world!"));
+        });
+        server->addRoute(beast::http::verb::get, "/hello/{}/world/{}", [=](Http::CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&) {
+            session->sendResponse(Http::InternalServerError(std::move(request), "world!"));
+        });
+        server->addRoute(beast::http::verb::get, "/h/e/l/l/o/{}", [=](Http::CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&) {
+            session->sendResponse(Http::InternalServerError(std::move(request), "world!"));
+        });
+        server->addRoute(beast::http::verb::get, "/h/e/l/l/o/{}/w/o/r/l/d", [=](Http::CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&) {
             session->sendResponse(Http::InternalServerError(std::move(request), "world!"));
         });
         std::this_thread::sleep_for(std::chrono::seconds(60));
