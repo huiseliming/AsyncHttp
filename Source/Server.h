@@ -42,7 +42,7 @@ namespace Http {
 
     struct CSegmentRoutingNode : public std::enable_shared_from_this<CSegmentRoutingNode> {
         std::shared_ptr<CRequestHandler> mPathEndRequestHandler;
-        std::shared_ptr<CRequestHandler> mParametersEndRequestHandler;
+        std::shared_ptr<CSegmentRoutingNode> mParametersRoutingNode;
         std::unordered_map<std::string_view, std::shared_ptr<CSegmentRoutingNode>> mSegmentRoutingTable;
     };
 
@@ -68,38 +68,36 @@ namespace Http {
             const char* segmentPathStart = segmentsView.begin()->data();
             for (auto segmentsIt = segmentsView.begin(); segmentsIt != segmentsView.end(); segmentsIt++)
             {
-                auto it = segmentRoutingNode->mSegmentRoutingTable.find(std::string_view(segmentPathStart, segmentsIt->data() + segmentsIt->length() - segmentPathStart));
-                if (it != segmentRoutingNode->mSegmentRoutingTable.end())
+                std::string_view segmentPath(segmentPathStart, segmentsIt->data() + segmentsIt->length() - segmentPathStart);
+
+                if (!segmentRoutingNode->mSegmentRoutingTable.empty())
                 {
-                    segmentRoutingNode = it->second.get();
-                    segmentsIt++;
-                    if (segmentsIt == segmentsView.end())
+                    auto it = segmentRoutingNode->mSegmentRoutingTable.find(segmentPath);
+                    if (it != segmentRoutingNode->mSegmentRoutingTable.end())
                     {
-                        requestHandler = segmentRoutingNode->mPathEndRequestHandler.get();
-                        break;
+                        segmentRoutingNode = it->second.get();
+                        segmentPathStart = segmentsIt->data() + segmentsIt->length() + 1;
                     }
-                    mappingParameters.push_back(*segmentsIt);
-                    if (segmentsView.back().data() == segmentsIt->data())
+                }
+                if (segmentPathStart <= segmentsIt->data())
+                {
+                    if (segmentRoutingNode->mParametersRoutingNode)
                     {
-                        requestHandler = segmentRoutingNode->mParametersEndRequestHandler.get();
-                        break;
+                        mappingParameters.push_back(*segmentsIt);
+                        segmentRoutingNode = segmentRoutingNode->mParametersRoutingNode.get();
+                        segmentPathStart = segmentsIt->data() + segmentsIt->length() + 1;
                     }
-                    segmentPathStart = segmentsIt->data() + segmentsIt->length() + 1;
                 }
             }
-            if (requestHandler)
+            auto lastSegment = segmentsView.back();
+            if (lastSegment->data() + lastSegment->length() + 1 == segmentPathStart)
             {
-                return (*requestHandler)(session, std::move(request), mappingParameters);
+                if (segmentRoutingNode->mPathEndRequestHandler)
+                {
+                    return (*segmentRoutingNode->mPathEndRequestHandler)(session, std::move(request), mappingParameters);
+                }
             }
             return session->sendResponse(NotFound(std::move(request), "The resource '" + std::string(request.target()) + "' was not found."));
-            BOOST_LOG_TRIVIAL(error) << "urlView.path(): " << urlView.path();
-            BOOST_LOG_TRIVIAL(error) << "urlView.has_query(): " << urlView.has_query();
-            BOOST_LOG_TRIVIAL(error) << "urlView.query(): " << urlView.query();
-            //auto segmentsView = urlView.encoded_segments();
-            for (auto segment : segmentsView)
-            {
-                BOOST_LOG_TRIVIAL(error) << "segment: " << segment;
-            }
         }
         bool addRoute(std::shared_ptr<CRequestHandler> requestHandler) {
             std::string_view path = requestHandler->path();
@@ -111,16 +109,25 @@ namespace Http {
             {
                 if (*segmentsIt->data() == '{' && *(segmentsIt->data() + segmentsIt->length() - 1) == '}')
                 {
-                    std::string_view segmentPath(segmentPathStart, segmentsIt->data() - segmentPathStart - 1);
-                    auto it = segmentRoutingNode->mSegmentRoutingTable.find(segmentPath);
-                    if (it == segmentRoutingNode->mSegmentRoutingTable.end())
+                    auto segmentPathLength = segmentsIt->data() - segmentPathStart - 1;
+                    if (segmentPathLength >= 0)
                     {
-                        it = segmentRoutingNode->mSegmentRoutingTable.insert(std::make_pair(segmentPath, std::make_shared<CSegmentRoutingNode>())).first;
+                        std::string_view segmentPath(segmentPathStart, segmentsIt->data() - segmentPathStart - 1);
+                        auto it = segmentRoutingNode->mSegmentRoutingTable.find(segmentPath);
+                        if (it == segmentRoutingNode->mSegmentRoutingTable.end())
+                        {
+                            it = segmentRoutingNode->mSegmentRoutingTable.insert(std::make_pair(segmentPath, std::make_shared<CSegmentRoutingNode>())).first;
+                        }
+                        segmentRoutingNode = it->second.get();
                     }
-                    segmentRoutingNode = it->second.get();
+                    if (!segmentRoutingNode->mParametersRoutingNode)
+                    {
+                        segmentRoutingNode->mParametersRoutingNode = std::make_shared<CSegmentRoutingNode>();
+                    }
+                    segmentRoutingNode = segmentRoutingNode->mParametersRoutingNode.get();
                     if (segmentsIt->data() == segmentsView.back().data())
                     {
-                        segmentRoutingNode->mParametersEndRequestHandler = std::move(requestHandler);
+                        segmentRoutingNode->mPathEndRequestHandler = std::move(requestHandler);
                     }
                     segmentPathStart = segmentsIt->data() + segmentsIt->length() + 1;
                 }
@@ -135,7 +142,7 @@ namespace Http {
             }
             else
             {
-                if (std::uintptr_t(segmentPathStart) <= std::uintptr_t(segmentsView.back().data()))
+                if (segmentPathStart <= segmentsView.back().data())
                 {
                     std::string_view segmentPath(segmentPathStart, segmentsView.back().data() + segmentsView.back().length() - segmentPathStart);
                     auto it = segmentRoutingNode->mSegmentRoutingTable.find(segmentPath);
