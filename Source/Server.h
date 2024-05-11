@@ -30,8 +30,8 @@ namespace Http {
             BOOST_LOG_TRIVIAL(error) << "mappedParameter ED: ";
             mFunc(session, std::move(request), mappingParameters);
         }
-        std::string_view path() { return mPath; }
-        const FRequestHandlerFunc& func() { return mFunc; }
+        FORCEINLINE std::string_view path() { return mPath; }
+        FORCEINLINE const FRequestHandlerFunc& func() { return mFunc; }
     protected:
         std::string mPath;
         FRequestHandlerFunc mFunc;
@@ -211,7 +211,7 @@ namespace Http {
         }
 
         template<typename FuncType, std::size_t ... Indices>
-        static void InvokeRequestHandler(FuncType func, CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>& mappingParameters, std::index_sequence<Indices...> indices) {
+        FORCEINLINE static void InvokeRequestHandler(FuncType func, CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>& mappingParameters, std::index_sequence<Indices...> indices) {
             constexpr bool kHasMappingParametersArg = std::is_same_v<typename std::tuple_element<2, boost::callable_traits::args_t<FuncType>>::type, const std::vector<std::string_view>&>;
             if constexpr (kHasMappingParametersArg) {
                 func(session, std::move(request), mappingParameters, boost::lexical_cast<std::decay_t<typename std::tuple_element<Indices + 3, boost::callable_traits::args_t<FuncType>>::type>>(mappingParameters[Indices])...);
