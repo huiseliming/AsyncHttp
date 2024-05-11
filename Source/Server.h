@@ -41,7 +41,7 @@ namespace Http {
     };
 
     struct CSegmentRoutingNode : public std::enable_shared_from_this<CSegmentRoutingNode> {
-        std::shared_ptr<CRequestHandler> mPathEndRequestHandler;
+        std::shared_ptr<CRequestHandler> mRequestHandler;
         std::shared_ptr<CSegmentRoutingNode> mParametersRoutingNode;
         std::unordered_map<std::string_view, std::shared_ptr<CSegmentRoutingNode>> mSegmentRoutingTable;
     };
@@ -92,9 +92,9 @@ namespace Http {
             auto lastSegment = segmentsView.back();
             if (lastSegment->data() + lastSegment->length() + 1 == segmentPathStart)
             {
-                if (segmentRoutingNode->mPathEndRequestHandler)
+                if (segmentRoutingNode->mRequestHandler)
                 {
-                    return (*segmentRoutingNode->mPathEndRequestHandler)(session, std::move(request), mappingParameters);
+                    return (*segmentRoutingNode->mRequestHandler)(session, std::move(request), mappingParameters);
                 }
             }
             return session->sendResponse(NotFound(std::move(request), "The resource '" + std::string(request.target()) + "' was not found."));
@@ -127,7 +127,7 @@ namespace Http {
                     segmentRoutingNode = segmentRoutingNode->mParametersRoutingNode.get();
                     if (segmentsIt->data() == segmentsView.back().data())
                     {
-                        segmentRoutingNode->mPathEndRequestHandler = std::move(requestHandler);
+                        segmentRoutingNode->mRequestHandler = std::move(requestHandler);
                     }
                     segmentPathStart = segmentsIt->data() + segmentsIt->length() + 1;
                 }
@@ -151,7 +151,7 @@ namespace Http {
                         it = segmentRoutingNode->mSegmentRoutingTable.insert(std::make_pair(segmentPath, std::make_shared<CSegmentRoutingNode>())).first;
                     }
                     segmentRoutingNode = it->second.get();
-                    segmentRoutingNode->mPathEndRequestHandler = std::move(requestHandler);
+                    segmentRoutingNode->mRequestHandler = std::move(requestHandler);
                 }
             }
             return true;
