@@ -12,5 +12,6 @@ ConstructorInitializerAllOnOneLineOrOnePerLine: false
 ConstructorInitializerIndentWidth: 4
 BreakConstructorInitializers: BeforeComma
 AlwaysBreakTemplateDeclarations: Yes
-#BreakTemplateDeclarations: BTDS_Yes
+AlignAfterOpenBracket: Align
+UseTab: Never
 ...
