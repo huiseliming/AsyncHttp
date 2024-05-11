@@ -1,5 +1,5 @@
 #pragma once
-#include "Session.h"
+#include "HttpSession.h"
 
 namespace Http {
 inline CSession::CSession(std::shared_ptr<CServer>& server, asio::ip::tcp::socket&& socket, std::shared_ptr<std::string const> const& docRoot)
@@ -9,8 +9,6 @@ inline CSession::CSession(std::shared_ptr<CServer>& server, asio::ip::tcp::socke
     static_assert(KQueueLimit > 0, "queue limit must be positive");
 }
 inline void CSession::onRead(beast::error_code errorCode, std::size_t bytesTransferred) {
-    boost::ignore_unused(bytesTransferred);
-
     if (errorCode == beast::http::error::end_of_stream)
         return doClose();
 
