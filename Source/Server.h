@@ -5,11 +5,12 @@
 #include <boost/callable_traits.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/url/parse.hpp>
+#include <boost/thread/pthread/shared_mutex.hpp>
 
 namespace Http {
 class CServer;
 
-typedef std::function<void(CSession*, beast::http::request<beast::http::string_body>&&, const std::vector<std::string_view>&)> FRequestHandlerFunc;
+using FRequestHandlerFunc = std::function<void(CSession*, beast::http::request<beast::http::string_body>&&, const std::vector<std::string_view>&)>;
 
 class CRequestHandler {
     static inline void NotImpl(CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&) { session->sendResponse(InternalServerError(std::move(request), "The requestHandler " + std::string(request.target()) + " not implemented")); }
@@ -38,12 +39,6 @@ class CRequestHandler {
   protected:
     std::string mPath;
     FRequestHandlerFunc mFunc;
-    // std::function<void(beast::http::request<beast::http::buffer_body>&&)>
-    // mHandler;
-    // std::function<void(beast::http::request<beast::http::dynamic_body>&&)>
-    // mHandler;
-    // std::function<void(beast::http::request<beast::http::empty_body>&&)>
-    // mHandler;
 };
 
 struct CSegmentRoutingNode : public std::enable_shared_from_this<CSegmentRoutingNode> {
@@ -70,6 +65,7 @@ struct CRoutingTable {
         CSegmentRoutingNode* segmentRoutingNode = &mSegmentRoutingTree;
         auto segmentsView = urlView.encoded_segments();
         const char* segmentPathStart = segmentsView.begin()->data();
+        std::shared_lock<std::shared_mutex> sharedLock(mSharedMutex);
         for (auto segmentsIt = segmentsView.begin(); segmentsIt != segmentsView.end(); segmentsIt++) {
             std::string_view segmentPath(segmentPathStart, segmentsIt->data() + segmentsIt->length() - segmentPathStart);
             if (!segmentRoutingNode->mSegmentRoutingTable.empty()) {
@@ -101,6 +97,7 @@ struct CRoutingTable {
         boost::split(segmentsView, path[0] == '/' ? path.substr(1) : path, boost::is_any_of("/"));
         CSegmentRoutingNode* segmentRoutingNode = &mSegmentRoutingTree;
         const char* segmentPathStart = segmentsView.begin()->data();
+        std::unique_lock<std::shared_mutex> uniqueLock(mSharedMutex);
         for (auto segmentsIt = segmentsView.begin(); segmentsIt != segmentsView.end(); segmentsIt++) {
             if (*segmentsIt->data() == '{' && *(segmentsIt->data() + segmentsIt->length() - 1) == '}') {
                 auto segmentPathLength = segmentsIt->data() - segmentPathStart - 1;
@@ -144,6 +141,7 @@ struct CRoutingTable {
   protected:
     std::unordered_map<std::string_view, std::shared_ptr<CRequestHandler>> mFullPathRoutingTable;
     CSegmentRoutingNode mSegmentRoutingTree;
+    std::shared_mutex mSharedMutex;
 };
 
 class CRouter {
