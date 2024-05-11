@@ -212,7 +212,14 @@ namespace Http {
 
         template<typename FuncType, std::size_t ... Indices>
         static void InvokeRequestHandler(FuncType func, CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>& mappingParameters, std::index_sequence<Indices...> indices) {
-            func(session, std::move(request), boost::lexical_cast<std::decay_t<typename std::tuple_element<Indices + 2, boost::callable_traits::args_t<FuncType>>::type>>(mappingParameters[Indices])...);
+            constexpr bool kHasMappingParametersArg = std::is_same_v<typename std::tuple_element<2, boost::callable_traits::args_t<FuncType>>::type, const std::vector<std::string_view>&>;
+            if constexpr (kHasMappingParametersArg) {
+                func(session, std::move(request), mappingParameters, boost::lexical_cast<std::decay_t<typename std::tuple_element<Indices + 3, boost::callable_traits::args_t<FuncType>>::type>>(mappingParameters[Indices])...);
+            }
+            else
+            {
+                func(session, std::move(request), boost::lexical_cast<std::decay_t<typename std::tuple_element<Indices + 2, boost::callable_traits::args_t<FuncType>>::type>>(mappingParameters[Indices])...);
+            }
         }
 
         template<typename FuncType>
@@ -226,12 +233,14 @@ namespace Http {
                 static_assert(std::is_same_v<typename std::tuple_element<0, boost::callable_traits::args_t<FuncType>>::type, CSession* >);
                 static_assert(std::is_same_v<typename std::tuple_element<1, boost::callable_traits::args_t<FuncType>>::type, beast::http::request<beast::http::string_body>&&>);
                 return addRoute(verb, std::make_shared<CRequestHandler>(path, [func = std::move(func)](CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>& mappingParameters) {
-                    constexpr std::size_t NumMappingParameters = std::tuple_size_v<boost::callable_traits::args_t<FuncType>> - 2;
-                    if (mappingParameters.size() == NumMappingParameters)
+                    constexpr bool kHasMappingParametersArg = std::is_same_v<typename std::tuple_element<2, boost::callable_traits::args_t<FuncType>>::type, const std::vector<std::string_view>&>;
+                    constexpr std::size_t kNumFuncArgs = std::tuple_size_v<boost::callable_traits::args_t<FuncType>>;
+                    constexpr std::size_t kNumMappingParameters = kHasMappingParametersArg ? kNumFuncArgs - 3 : kNumFuncArgs - 2;
+                    if (mappingParameters.size() == kNumMappingParameters)
                     {
                         try
                         {
-                            InvokeRequestHandler(func, session, std::move(request), mappingParameters, std::make_index_sequence<NumMappingParameters>());
+                            InvokeRequestHandler(func, session, std::move(request), mappingParameters, std::make_index_sequence<kNumMappingParameters>());
                         }
                         catch (const boost::bad_lexical_cast& badLexicalCast)
                         {

@@ -558,7 +558,7 @@ int main(int argc, char *argv[]) {
         server->addRoute(beast::http::verb::get, "/h/e/l/l/o/{}", [=](Http::CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&) {
             session->sendResponse(Http::InternalServerError(std::move(request), "world!"));
         });
-        server->addRoute(beast::http::verb::get, "/h/e/l/l/o/{}/w/o/r/l/d", [=](Http::CSession* session, beast::http::request<beast::http::string_body>&& request, std::string a) {
+        server->addRoute(beast::http::verb::get, "/h/e/l/l/o/{}/w/o/r/l/d", [=](Http::CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&, std::string a) {
             session->sendResponse(Http::InternalServerError(std::move(request), "world!"));
         });
         std::this_thread::sleep_for(std::chrono::seconds(60));
