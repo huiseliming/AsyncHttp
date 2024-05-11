@@ -42,7 +42,7 @@ namespace Http {
 
     struct CSegmentRoutingNode : public std::enable_shared_from_this<CSegmentRoutingNode> {
         std::shared_ptr<CRequestHandler> mRequestHandler;
-        std::shared_ptr<CSegmentRoutingNode> mParametersRoutingNode;
+        std::shared_ptr<CSegmentRoutingNode> mMappingParameterRoutingNode;
         std::unordered_map<std::string_view, std::shared_ptr<CSegmentRoutingNode>> mSegmentRoutingTable;
     };
 
@@ -81,10 +81,10 @@ namespace Http {
                 }
                 if (segmentPathStart <= segmentsIt->data())
                 {
-                    if (segmentRoutingNode->mParametersRoutingNode)
+                    if (segmentRoutingNode->mMappingParameterRoutingNode)
                     {
                         mappingParameters.push_back(*segmentsIt);
-                        segmentRoutingNode = segmentRoutingNode->mParametersRoutingNode.get();
+                        segmentRoutingNode = segmentRoutingNode->mMappingParameterRoutingNode.get();
                         segmentPathStart = segmentsIt->data() + segmentsIt->length() + 1;
                     }
                 }
@@ -120,11 +120,11 @@ namespace Http {
                         }
                         segmentRoutingNode = it->second.get();
                     }
-                    if (!segmentRoutingNode->mParametersRoutingNode)
+                    if (!segmentRoutingNode->mMappingParameterRoutingNode)
                     {
-                        segmentRoutingNode->mParametersRoutingNode = std::make_shared<CSegmentRoutingNode>();
+                        segmentRoutingNode->mMappingParameterRoutingNode = std::make_shared<CSegmentRoutingNode>();
                     }
-                    segmentRoutingNode = segmentRoutingNode->mParametersRoutingNode.get();
+                    segmentRoutingNode = segmentRoutingNode->mMappingParameterRoutingNode.get();
                     if (segmentsIt->data() == segmentsView.back().data())
                     {
                         segmentRoutingNode->mRequestHandler = std::move(requestHandler);
