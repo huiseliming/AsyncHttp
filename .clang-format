@@ -7,8 +7,10 @@ AllowShortFunctionsOnASingleLine: Inline
 BraceWrapping:
   AfterFunction:   false
 BreakBeforeBraces: Attach
-ColumnLimit: 0
+ColumnLimit: 9999
 ConstructorInitializerAllOnOneLineOrOnePerLine: false
 ConstructorInitializerIndentWidth: 4
 BreakConstructorInitializers: BeforeComma
+AlwaysBreakTemplateDeclarations: Yes
+#BreakTemplateDeclarations: BTDS_Yes
 ...
