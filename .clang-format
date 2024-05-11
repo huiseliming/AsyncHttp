@@ -1,0 +1,14 @@
+---
+IndentWidth: 4
+SortIncludes: false
+PointerAlignment: Left
+AllowShortBlocksOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Inline
+BraceWrapping:
+  AfterFunction:   false
+BreakBeforeBraces: Attach
+ColumnLimit: 0
+ConstructorInitializerAllOnOneLineOrOnePerLine: false
+ConstructorInitializerIndentWidth: 4
+BreakConstructorInitializers: BeforeComma
+...
