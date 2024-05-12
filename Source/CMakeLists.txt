@@ -12,6 +12,9 @@ add_executable(${MODULE_NAME} ${${MODULE_NAME}_HEADERS} ${${MODULE_NAME}_SOURCES
 target_include_directories(${MODULE_NAME} PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(${MODULE_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
+find_package(OpenSSL REQUIRED)
+target_link_libraries(${MODULE_NAME} PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+
 if(WIN32)
     set(Boost_USE_STATIC_LIBS ON)
 else()

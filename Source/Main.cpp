@@ -459,6 +459,7 @@ class listener : public std::enable_shared_from_this<listener> {
 //------------------------------------------------------------------------------
 
 #include "Http.h"
+#include "HttpMySQL.h"
 
 template <typename FuncType, size_t I>
 using ArgType = std::tuple_element<I, boost::callable_traits::args_t<FuncType>>::type;
@@ -517,6 +518,12 @@ int main(int argc, char* argv[]) {
 
     try {
         std::shared_ptr<Http::CServer> server = std::make_shared<Http::CServer>(boost::asio::ip::address_v4::any(), 80);
+        MySQL::CDBConnectionPool dbcp(server->ioContext(), "root", "");
+        dbcp.asyncGetConnection([](MySQL::CPooledConnection pooledConnection) { 
+            boost::mysql::results results;
+            pooledConnection.getConnection()->query("SHOW DATABASES", results);
+            std::cout << " results : " << results.rows().at(0).at(0) << std::endl;
+        });
         server->setEnabled(true);
         server->addRoute(beast::http::verb::get, "/hello/{}///{}/{}/{}/{}/{}", [=](Http::CSession* session, beast::http::request<beast::http::string_body>&& request, std::string a, std::string&& b, const std::string& c, int d, double&& e, const int64_t& f) {
             std::cout << "a: " << a << std::endl;
