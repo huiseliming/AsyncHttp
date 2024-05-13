@@ -3,6 +3,9 @@
 #include <boost/log/trivial.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ssl/context.hpp>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
+#include <boost/asio/as_tuple.hpp>
 
 namespace MySQL {
 using namespace boost;
@@ -27,28 +30,19 @@ class CPooledConnection : public std::enable_shared_from_this<CPooledConnection>
 };
 
 class CDBConnectionPool {
-    constexpr static size_t KNumConnections = 8;
+    constexpr static size_t KNumConnections = 64;
   public:
-    CDBConnectionPool(asio::io_context& ioContext, const std::string& username, const std::string& password, asio::ip::address address = asio::ip::address_v4::loopback(), uint16_t port = 3306)
+    CDBConnectionPool(asio::io_context& ioContext, const std::string& username, const std::string& password, const std::string& database, asio::ip::address address = asio::ip::address_v4::loopback(), uint16_t port = 3306)
         : mIoContext(ioContext)
         , mStrand(ioContext)
         , mSSLContext(asio::ssl::context::tls_client)
+        , mNumConnections(KNumConnections)
         , mAvailableConnections({})
         , mUsername(username)
         , mPassword(password)
+        , mDatabase(database)
         , mAddress(address)
         , mPort(port) {
-    }
-
-    void asyncGetConnection(std::function<void(CPooledConnection pooledConnection)> completeCallback) {
-        asio::dispatch(mStrand, [=, completeCallback = std::move(completeCallback)] {
-            auto connection = allocConnection();
-            if (connection) {
-                completeCallback(CPooledConnection(this, connection));
-            } else {
-                mAsyncCallbackQueue.push(completeCallback);
-            }
-        });
     }
 
     //void asyncQuery(std::string_view sql) {
@@ -71,50 +65,131 @@ class CDBConnectionPool {
     //const asio::ip::address& address() { return mAddress; }
     //uint16_t port() { return mPort; }
 
-    mysql::tcp_ssl_connection* allocConnection() {
-        mysql::tcp_ssl_connection* connection = nullptr;
-        if (!mAvailableConnections.empty()) {
-            connection = mAvailableConnections.back();
-            mAvailableConnections.pop_back();
-        } else {
-            if (mAvailableConnections.size() < mNumConnections) {
-                mNumConnections++;
-                asio::ip::tcp::resolver* resolver = new asio::ip::tcp::resolver(mIoContext.get_executor());
-                resolver->async_resolve(asio::ip::tcp::endpoint(mAddress, mPort), [=](const boost::system::error_code& errorCode, asio::ip::tcp::resolver::results_type endpoints) {
-                    delete resolver;
-                    if (errorCode.failed()) {
-                        asio::post(mStrand, [=] { mNumConnections--; });
+
+    template <typename CompletionToken>
+    auto asyncAllocConnection(CompletionToken&& token) {
+        return asio::async_compose<CompletionToken, void(CPooledConnection)>(
+            [=](auto&& self) mutable {
+                bool allowNewConnection = false;
+                {
+                    mAvailableConnectionsMutex.lock();
+                    if (!mAvailableConnections.empty()) {
+                        mysql::tcp_ssl_connection* connection = mAvailableConnections.back();
+                        mAvailableConnections.pop_back();
+                        mAvailableConnectionsMutex.unlock();
+                        self.complete(CPooledConnection(this, connection));
                         return;
                     }
-                    mysql::handshake_params handshakeParams(mUsername, mPassword);
-                    std::shared_ptr<boost::mysql::diagnostics> diagnostics = std::make_shared<boost::mysql::diagnostics>();
-                    mysql::tcp_ssl_connection* connection = new mysql::tcp_ssl_connection(mIoContext, mSSLContext);
-                    connection->async_connect(*endpoints.begin(), handshakeParams, *diagnostics, [=](mysql::error_code errorCode) {
-                        if (errorCode) {
-                            asio::post(mStrand, [=] { mNumConnections--; });
-                            BOOST_LOG_TRIVIAL(error) << "MYSQL client message: " << diagnostics->client_message();
-                            BOOST_LOG_TRIVIAL(error) << "MYSQL server message: " << diagnostics->server_message();
-                            delete connection;
-                            return;
-                        }
-                        freeConnection(connection);
-                    });
-                });
-            }
-        }
-        return connection;
+                    if (mAvailableConnections.size() < mNumConnections) {
+                        mNumConnections++;
+                        allowNewConnection = true;
+                    }
+                    mAvailableConnectionsMutex.unlock();
+                }
+                if (allowNewConnection) {
+                    asio::co_spawn(
+                        mIoContext.get_executor(),
+                        [&, self = std::move(self)]() mutable -> asio::awaitable<void> {
+                            boost::system::error_code errorCode;
+                            asio::ip::tcp::resolver resolver(mIoContext.get_executor());
+                            asio::ip::tcp::resolver::results_type endpoints;
+                            std::tie(errorCode, endpoints) = co_await resolver.async_resolve(asio::ip::tcp::endpoint(mAddress, mPort), boost::asio::as_tuple(asio::use_awaitable));
+                            if (errorCode.failed()) {
+                                BOOST_LOG_TRIVIAL(error) << "async_resolve error: " << errorCode.what();
+                            } else {
+                                mysql::tcp_ssl_connection* connection = new mysql::tcp_ssl_connection(mIoContext, mSSLContext);
+                                mysql::handshake_params handshakeParams(mUsername, mPassword, mDatabase);
+                                boost::mysql::diagnostics diagnostics;
+                                std::tie(errorCode) = co_await connection->async_connect(*endpoints.begin(), handshakeParams, diagnostics, boost::asio::as_tuple(asio::use_awaitable));
+                                if (errorCode) {
+                                    BOOST_LOG_TRIVIAL(error) << "async_connect error: " << errorCode.what();
+                                    BOOST_LOG_TRIVIAL(error) << "MYSQL client message: " << diagnostics.client_message();
+                                    BOOST_LOG_TRIVIAL(error) << "MYSQL server message: " << diagnostics.server_message();
+                                } else {
+                                    self.complete(CPooledConnection(this, connection));
+                                    co_return;
+                                }
+                            }
+                            self.complete(CPooledConnection(this, nullptr));
+                            co_return;
+                        },
+                        asio::detached);
+                    //resolver.async_resolve(asio::ip::tcp::endpoint(mAddress, mPort), [=, self = std::move(self)](const boost::system::error_code& errorCode, asio::ip::tcp::resolver::results_type endpoints) mutable {
+                    //    if (errorCode.failed()) {
+                    //        BOOST_LOG_TRIVIAL(error) << "async_resolve error: " << errorCode.what();
+                    //        self.complete(CPooledConnection(this, nullptr));
+                    //        return;
+                    //    }
+                    //    mysql::handshake_params handshakeParams(mUsername, mPassword);
+                    //    boost::mysql::diagnostics diagnostics;
+                    //    mysql::tcp_ssl_connection* connection = new mysql::tcp_ssl_connection(mIoContext, mSSLContext);
+                    //    connection->async_connect(*endpoints.begin(), handshakeParams, diagnostics, [=, self = std::move(self)](mysql::error_code errorCode) mutable {
+                    //        if (errorCode) {
+                    //            BOOST_LOG_TRIVIAL(error) << "MYSQL client message: " << diagnostics.client_message();
+                    //            BOOST_LOG_TRIVIAL(error) << "MYSQL server message: " << diagnostics.server_message();
+                    //            delete connection;
+                    //            self.complete(CPooledConnection(this, nullptr));
+                    //            return;
+                    //        }
+                    //        self.complete(CPooledConnection(this, connection));
+                    //    });
+                    //});
+                } else {
+                    self.complete(CPooledConnection(this, nullptr));
+                }
+            },
+            token);
     }
 
-    void freeConnection(mysql::tcp_ssl_connection* connection) { 
-        asio::dispatch(mStrand, [=, connection = std::move(connection)] () mutable { 
+    //mysql::tcp_ssl_connection* allocConnection() {
+    //    {
+    //        std::lock_guard<std::mutex> lockAvailableConnections(mAvailableConnectionsMutex);
+    //        if (!mAvailableConnections.empty()) {
+    //            mysql::tcp_ssl_connection* connection = mAvailableConnections.back();
+    //            mAvailableConnections.pop_back();
+    //            return connection;
+    //        }
+    //    }
+    //    if (mAvailableConnections.size() < mNumConnections) {
+    //        asio::ip::tcp::resolver* resolver = new asio::ip::tcp::resolver(mIoContext.get_executor());
+    //        resolver->async_resolve(asio::ip::tcp::endpoint(mAddress, mPort), [=](const boost::system::error_code& errorCode, asio::ip::tcp::resolver::results_type endpoints) {
+    //            delete resolver;
+    //            if (errorCode.failed()) {
+    //                asio::post(mStrand, [=] { mNumConnections--; });
+    //                return;
+    //            }
+    //            mysql::handshake_params handshakeParams(mUsername, mPassword);
+    //            std::shared_ptr<boost::mysql::diagnostics> diagnostics = std::make_shared<boost::mysql::diagnostics>();
+    //            mysql::tcp_ssl_connection* connection = new mysql::tcp_ssl_connection(mIoContext, mSSLContext);
+    //            connection->async_connect(*endpoints.begin(), handshakeParams, *diagnostics, [=](mysql::error_code errorCode) {
+    //                if (errorCode) {
+    //                    asio::post(mStrand, [=] { mNumConnections--; });
+    //                    BOOST_LOG_TRIVIAL(error) << "MYSQL client message: " << diagnostics->client_message();
+    //                    BOOST_LOG_TRIVIAL(error) << "MYSQL server message: " << diagnostics->server_message();
+    //                    delete connection;
+    //                    return;
+    //                }
+    //                freeConnection(connection);
+    //            });
+    //        });
+    //    }
+    //    return connection;
+    //}
+
+    void freeConnection(mysql::tcp_ssl_connection* connection) {
+        std::function<void(CPooledConnection)> asyncCallback;
+        {
+            std::lock_guard<std::mutex> lockAvailableConnections(mAvailableConnectionsMutex);
             if (!mAsyncCallbackQueue.empty()) {
-                auto asyncCallback = std::move(mAsyncCallbackQueue.back());
+                asyncCallback = std::move(mAsyncCallbackQueue.back());
                 mAsyncCallbackQueue.pop();
-                asyncCallback(CPooledConnection(this, std::move(connection)));
             } else {
                 mAvailableConnections.emplace_back(std::move(connection));
             }
-        });
+        }
+        if (asyncCallback) {
+            asyncCallback(CPooledConnection(this, std::move(connection)));
+        }
     }
 
   protected:
@@ -123,10 +198,12 @@ class CDBConnectionPool {
     asio::ssl::context mSSLContext;
     std::string mUsername;
     std::string mPassword;
+    std::string mDatabase;
     asio::ip::address mAddress;
     uint16_t mPort;
     size_t mNumConnections;
     std::vector<mysql::tcp_ssl_connection*> mAvailableConnections;
+    std::mutex mAvailableConnectionsMutex;
     std::queue<std::function<void(CPooledConnection)>> mAsyncCallbackQueue;
 };
 

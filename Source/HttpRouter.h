@@ -202,11 +202,13 @@ class CRouter {
     BOOST_FORCEINLINE bool addRoute(beast::http::verb verb, const char* path, FuncType&& func) {
         if constexpr (std::is_convertible_v<FuncType, FRequestHandlerFunc>) {
             return addRoute(verb, std::make_shared<CRequestHandler>(path, std::forward<FuncType>(func)));
+        } else if constexpr (std::is_convertible_v<FuncType, std::function<void(CSession*, beast::http::request<beast::http::string_body>&&)>>) {
+            return addRoute(verb, std::make_shared<CRequestHandler>(path, [func = std::move(func)](CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>&) { func(session, std::move(request)); }));
         } else {
-            static_assert(std::is_same_v<typename std::tuple_element<0, boost::callable_traits::args_t<FuncType>>::type, CSession*>);
-            static_assert(std::is_same_v<typename std::tuple_element<1, boost::callable_traits::args_t<FuncType>>::type, beast::http::request<beast::http::string_body>&&>);
+            constexpr bool kHasMappingParametersArg = std::is_same_v<typename std::tuple_element<2, boost::callable_traits::args_t<decltype(func)>>::type, const std::vector<std::string_view>&>;
+            static_assert(std::is_same_v<typename std::tuple_element<0, boost::callable_traits::args_t<decltype(func)>>::type, CSession*>);
+            static_assert(std::is_same_v<typename std::tuple_element<1, boost::callable_traits::args_t<decltype(func)>>::type, beast::http::request<beast::http::string_body>&&>);
             return addRoute(verb, std::make_shared<CRequestHandler>(path, [func = std::move(func)](CSession* session, beast::http::request<beast::http::string_body>&& request, const std::vector<std::string_view>& mappingParameters) {
-                                constexpr bool kHasMappingParametersArg = std::is_same_v<typename std::tuple_element<2, boost::callable_traits::args_t<FuncType>>::type, const std::vector<std::string_view>&>;
                                 constexpr std::size_t kNumFuncArgs = std::tuple_size_v<boost::callable_traits::args_t<FuncType>>;
                                 constexpr std::size_t kNumMappingParameters = kHasMappingParametersArg ? kNumFuncArgs - 3 : kNumFuncArgs - 2;
                                 if (mappingParameters.size() == kNumMappingParameters) {

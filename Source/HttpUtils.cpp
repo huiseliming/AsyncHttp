@@ -101,6 +101,16 @@ beast::http::response<beast::http::string_body> InternalServerError(beast::http:
     res.prepare_payload();
     return res;
 }
+beast::http::response<beast::http::string_body> Ok(beast::http::request<beast::http::string_body>&& req, std::string body) {
+    beast::http::response<beast::http::string_body> res{beast::http::status::ok, req.version()};
+    res.set(beast::http::field::server, BOOST_BEAST_VERSION_STRING);
+    res.set(beast::http::field::content_type, "text/html");
+    res.keep_alive(req.keep_alive());
+    res.body() = std::move(body);
+    res.prepare_payload();
+    return res;
+}
+
 // beast::http::response<beast::http::string_body> InternalServerError(unsigned int version, std::string&& body)
 //{
 //     beast::http::response<beast::http::string_body> res{ beast::http::status::internal_server_error, version };

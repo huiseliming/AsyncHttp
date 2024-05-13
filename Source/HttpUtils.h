@@ -12,5 +12,7 @@ std::string PathCat(beast::string_view base, beast::string_view path);
 beast::http::response<beast::http::string_body> BadRequest(beast::http::request<beast::http::string_body>&& req, std::string body);
 beast::http::response<beast::http::string_body> NotFound(beast::http::request<beast::http::string_body>&& req, std::string body);
 beast::http::response<beast::http::string_body> InternalServerError(beast::http::request<beast::http::string_body>&& req, std::string body);
+beast::http::response<beast::http::string_body> Ok(beast::http::request<beast::http::string_body>&& req, std::string body);
+
 // beast::http::response<beast::http::string_body> InternalServerError(unsigned int version, std::string&& body);
 } // namespace Http
