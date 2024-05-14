@@ -26,7 +26,7 @@ class CSession : public std::enable_shared_from_this<CSession> {
   protected:
     void doRead() {
         mRequestParser.emplace();
-        mRequestParser->body_limit(10000);
+        mRequestParser->body_limit(4 * 1024 * 1024);
 
         mStream.expires_after(std::chrono::seconds(30));
 

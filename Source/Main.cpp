@@ -4,12 +4,43 @@
 
 #include <boost/mysql/static_results.hpp>
 #include <boost/describe/class.hpp>
-#define RAPIDJSON_HAS_STDSTRING 1
-#include <rapidjson/document.h>
-#include <rapidjson/writer.h>
-#include <rapidjson/stringbuffer.h>
+#include <boost/json.hpp>
 
 using namespace boost;
+
+template <class T, class D1 = boost::describe::describe_members<T, boost::describe::mod_public | boost::describe::mod_protected>, class D2 = boost::describe::describe_members<T, boost::describe::mod_private>, class En = std::enable_if_t<boost::mp11::mp_empty<D2>::value && !std::is_union<T>::value>>
+
+void tag_invoke(boost::json::value_from_tag const&, boost::json::value& v, T const& t) {
+    auto& obj = v.emplace_object();
+
+    boost::mp11::mp_for_each<D1>([&](auto D) {
+        obj[D.name] = boost::json::value_from(t.*D.pointer);
+    });
+}
+
+template <class T>
+void extract(boost::json::object const& obj, char const* name, T& value) {
+    value = boost::json::value_to<T>(obj.at(name));
+}
+
+template <class T, class D1 = boost::describe::describe_members<T, boost::describe::mod_public | boost::describe::mod_protected>, class D2 = boost::describe::describe_members<T, boost::describe::mod_private>, class En = std::enable_if_t<boost::mp11::mp_empty<D2>::value && !std::is_union<T>::value>>
+
+T tag_invoke(boost::json::value_to_tag<T> const&, boost::json::value const& v) {
+    auto const& obj = v.as_object();
+
+    T t{};
+
+    boost::mp11::mp_for_each<D1>([&](auto D) {
+        extract(obj, D.name, t.*D.pointer);
+    });
+
+    return t;
+}
+
+
+
+
+
 
 struct Tester {
     Tester() { 
@@ -62,11 +93,19 @@ struct User {
 };
 BOOST_DESCRIBE_STRUCT(User, (), (id, wxId, username, password, nickname, phoneNumber, companyName, totalConsumption))
 
+struct ErrorWithDiagnostics {
+    const char* error;
+    std::string_view diagnostics;
+};
+BOOST_DESCRIBE_STRUCT(ErrorWithDiagnostics, (), (error, diagnostics))
+
 class CUserController {
   public:
     CUserController(MySQL::CDBConnectionPool& connectionPool, std::shared_ptr<Http::CServer> server)
         : mConnectionPool(connectionPool)
-        , mServer(server) {}
+        , mServer(server) {
+        server->addRoute(beast::http::verb::get, "/bxzn_v1/user/{}", std::function<void(Http::CSession*, beast::http::request<beast::http::string_body>&&, int64_t)>(std::bind_front(&CUserController::getUser, this)));
+    }
 
     asio::awaitable<void> asyncGetUser(std::shared_ptr<Http::CSession> session, beast::http::request<beast::http::string_body> request, int64_t id) {
         try {
@@ -75,7 +114,7 @@ class CUserController {
             MySQL::CPooledConnection pooledConnection = co_await mConnectionPool.asyncAllocConnection(asio::use_awaitable);
             if (pooledConnection.getConnection()) {
                 mysql::statement statement;
-                std::tie(errorCode, statement) = co_await pooledConnection.getConnection()->async_prepare_statement("SELECT * FROM user WHERE id = ?", diagnostics, asio::as_tuple(boost::asio::use_awaitable));
+                std::tie(errorCode, statement) = co_await pooledConnection.getConnection()->async_prepare_statement("SELECT * FROM user WHERE i443d = ?", diagnostics, asio::as_tuple(boost::asio::use_awaitable));
                 boost::mysql::throw_on_error(errorCode, diagnostics);
                 mysql::static_results<User> userResult;
                 std::tie(errorCode) = co_await pooledConnection.getConnection()->async_execute(statement.bind(id), userResult, diagnostics, asio::as_tuple(boost::asio::use_awaitable));
@@ -83,20 +122,7 @@ class CUserController {
                 auto row = userResult.rows();
                 if (!row.empty()) {
                     auto& user = row[0];
-                    rapidjson::Document doc;
-                    doc.SetObject();
-                    doc.AddMember("id", user.id, doc.GetAllocator());
-                    doc.AddMember("wxId", user.wxId, doc.GetAllocator());
-                    //doc.AddMember("username", user.username., doc.GetAllocator());
-                    //doc.AddMember("password", user.password, doc.GetAllocator());
-                    //doc.AddMember("nickname", user.nickname, doc.GetAllocator());
-                    //doc.AddMember("phoneNumber", user.phoneNumber, doc.GetAllocator());
-                    //doc.AddMember("companyName", user.companyName, doc.GetAllocator());
-                    doc.AddMember("totalConsumption", user.totalConsumption, doc.GetAllocator());
-                    rapidjson::StringBuffer buffer;
-                    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
-                    doc.Accept(writer);
-                    session->sendResponse(Http::Ok(std::move(request), buffer.GetString()));
+                    session->sendResponse(Http::Ok(std::move(request), json::serialize(json::value_from(user))));
                 } else {
                     session->sendResponse(Http::InternalServerError(std::move(request), "Not user"));
                 }
@@ -104,22 +130,11 @@ class CUserController {
                 session->sendResponse(Http::InternalServerError(std::move(request), "not connection"));
             }
         } catch (const mysql::error_with_diagnostics& mysqlError) {
-            session->sendResponse(Http::InternalServerError(std::move(request), std::format("Error: {}\ndiagnostics: {}", mysqlError.what(), std::string_view(mysqlError.get_diagnostics().server_message()))));
+            session->sendResponse(Http::InternalServerError(std::move(request), json::serialize(json::value_from(ErrorWithDiagnostics{.error = mysqlError.what(), .diagnostics = mysqlError.get_diagnostics().server_message()}))));
         }
     }
-
     void getUser(Http::CSession* session, beast::http::request<beast::http::string_body>&& request, int64_t id) {
-        //std::shared_ptr<beast::http::request<beast::http::string_body>> requestPtr = std::make_shared<beast::http::request<beast::http::string_body>>(std::move(request));
-        asio::co_spawn(mServer->ioContext(), asyncGetUser(session->shared_from_this(), std::move(request), id), 
-        [=](std::exception_ptr exception_ptr) {
-            if (exception_ptr) {
-                try {
-                    std::rethrow_exception(exception_ptr);
-                } catch (const mysql::error_with_diagnostics& mysqlError) {
-                    //session->sendResponse(Http::InternalServerError(std::move(*requestPtr), std::format("Error: {}\ndiagnostics: {}", mysqlError.what(), std::string_view(mysqlError.get_diagnostics().server_message()))));
-                }
-            }
-        });
+        asio::co_spawn(mServer->ioContext(), asyncGetUser(session->shared_from_this(), std::move(request), id), asio::detached);
     }
 
     MySQL::CDBConnectionPool& mConnectionPool;
@@ -127,24 +142,11 @@ class CUserController {
 };
 
 int main(int argc, char* argv[]) {
-
-    std::string_view ccs = "dsds";
-    auto aa = boost::lexical_cast<std::string>(ccs);
-
-    std::cout << typeid(std::tuple_element<0, boost::callable_traits::args_t<decltype(main)>>::type).name() << std::endl;
-    // std::cout << typeid(boost::mpl::at_c<boost::function_types::parameter_types<decltype(main)>, 0>::type).name() << std::endl;
-    // boost::mpl::at_c<boost::function_types::parameter_types<decltype(main)>, 0>::type;
-
     try {
-        std::shared_ptr<Http::CServer> server = std::make_shared<Http::CServer>(boost::asio::ip::address_v4::any(), 80);
-        //for (size_t i = 0; i < 64; i++) {
-        //    asio::co_spawn(server->ioContext(), echo(i), boost::asio::detached);
-        //}
+        std::shared_ptr<Http::CServer> server = std::make_shared<Http::CServer>(boost::asio::ip::address_v6::any(), 80);
         MySQL::CDBConnectionPool dbcp(server->ioContext(), "root", "", "user");
-        //asio::co_spawn(server->ioContext(), Sql(&dbcp), boost::asio::detached);
         CUserController userController(dbcp, server);
         server->setEnabled(true);
-        server->addRoute(beast::http::verb::get, "/bxzn_v1/user/{}", std::function<void (Http::CSession *, beast::http::request<beast::http::string_body> &&, int64_t)>(std::bind_front(&CUserController::getUser, &userController)));
         server->addRoute(beast::http::verb::get, "/hello/{}///{}/{}/{}/{}/{}", [=](Http::CSession* session, beast::http::request<beast::http::string_body>&& request, std::string a, std::string&& b, const std::string& c, int d, double&& e, const int64_t& f) {
             std::cout << "a: " << a << std::endl;
             std::cout << "b: " << b << std::endl;

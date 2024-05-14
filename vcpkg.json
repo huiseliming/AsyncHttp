@@ -4,11 +4,11 @@
         "boost-callable-traits",
         "boost-beast",
         "boost-filesystem",
+        "boost-json",
         "boost-mysql",
         "boost-dll",
         "boost-log",
         "boost-url",
-        "openssl",
-        "rapidjson"
+        "openssl"
     ]
 }

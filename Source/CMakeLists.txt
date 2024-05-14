@@ -15,15 +15,12 @@ target_include_directories(${MODULE_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 find_package(OpenSSL REQUIRED)
 target_link_libraries(${MODULE_NAME} PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 
-find_package(RapidJSON CONFIG REQUIRED)
-target_link_libraries(${MODULE_NAME} PRIVATE rapidjson)
-
 if(WIN32)
     set(Boost_USE_STATIC_LIBS ON)
 else()
     set(Boost_USE_STATIC_LIBS OFF)
 endif()
-find_package(Boost COMPONENTS filesystem log url REQUIRED)
+find_package(Boost COMPONENTS filesystem json log url REQUIRED)
 target_link_libraries(${MODULE_NAME} PUBLIC Boost::headers ${Boost_LIBRARIES})
 
 # include(GenerateExportHeader)
